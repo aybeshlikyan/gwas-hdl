@@ -1,0 +1,115 @@
+---
+title: "GWAS-HDL Final Project"
+author: "Arpi Beshlikyan"
+date: "6 December 2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+ 
+# 1. Using SNP data and phenotype data, perform the linear regression using --linear option in PLINK.
+
+From (http://zzz.bwh.harvard.edu/plink/anal.shtml#glm)[http://zzz.bwh.harvard.edu/plink/anal.shtml#glm],
+>The basic association test is for a disease trait and is based on comparing allele frequencies between cases and controls (asymptotic and empirical p-values are available). 
+
+```{bash}
+plink --bfile 'project_3_files/snpdata' --linear --pheno 'project_3_files/phenotype.txt'
+```
+]
+# 2. Convert the PLINK binary format to text format. The implement linear regression in R and apply it to the SNP data and phenotype data. Perform linear regression between each SNP and a phenotype using lm() in R and calculate a p-value for each SNP. You may want to transpose the binary BED or PED file, which will allow you to read the SNP data line by line. find whether p-values from linear regression in R are consistent with p-values from linear regression in PLINK. You may want to calculate the differences in p-values between R and PLINK and plot the differences. If they are different, explain why.
+
+```{bash}
+plink --bfile 'project_3_files/snpdata' --recode A --recode-allele 'project_3_files/snpdata.bim'
+```
+
+```{r}
+pheno <- read.table(file="project_3_files/phenotype.txt", header=FALSE)
+names(pheno)=c("FID","IID","Phenotype")
+pheno
+```
+
+```{r}
+plink.traw <- file("plink.traw", "r")
+line <- readLines(plink.traw, n=1)
+pVals <- rep(NA, 828325)
+
+for (i in (1:828325)){
+  line <- readLines(plink.traw, n=1)
+  geno.snps <- as.numeric(unlist(strsplit(line, "\t"))[2510-(2503:0)])
+  fit <- lm(pheno$Phenotype~geno.snps)
+  currPVal <- summary(fit)$coefficients[2,4]
+  pVals[i] = currPVal
+}
+
+close(plink.traw)
+rm(plink.traw)
+rm(line)
+rm(geno.snps)
+```
+
+```{r}
+library(data.table)
+plink.lr <- fread("plink.assoc.linear")
+
+# plot((1:828325), (pVals-plink.lr$P), 
+#      main="Difference in P-Values from R and PLINK",
+#      xlab="SNP", ylab="Difference")
+
+hist(pVals-plink.lr$P,
+     main="Difference in P-Values from R and PLINK",
+     xlab="Difference")
+summary(pVals-plink.lr$P)
+```
+# 3. Draw the Manhattan plot using p-values from linear regression results from PLINK.
+
+```{r}
+source("project_3_files/qqman.r")
+
+manhattan(plink.lr)
+```
+
+# 4. Find a SNP with the minimum p-value in each chhromosome from linear regression results from PLINK. Compare this p-value to p-value from UK Biobank GWAS summary statistics, which is available. Does the SNP with the minimum p-value in each chromosome from your GWAS have similarly low p-values in UK Biobank GWAS summary statistics? Create the table that lists the SNP with minium p-value on each chromosome from PLINK, your GWAS and the UK Biobank summary statistics.
+
+```{r}
+chrs <- c()
+snps <- c()
+minPVals <- c()
+
+for(i in (1:22)){
+	chrRows <- plink.lr[plink.lr$CHR==i]
+	minRows <-chrRows[chrRows$P==min(chrRows$P)]
+	chrs <- c(chrs, i)
+	snps <- c(snps, minRows$SNP)
+	minPVals <-c(minPVals, minRows$P)
+}
+
+data.PVals <- data.frame(chrs, snps, minPVals)
+```
+
+```{bash}
+wget https://www.dropbox.com/s/65jisgxwbbdrkaw/30760_irnt.gwas.imputed_v3.both_sexes.tsv.bgz?dl=0 -O 30760_irnt.gwas.imputed_v3.both_sexes.tsv.bgz
+wget https://www.dropbox.com/s/puxks683vb0omeg/variants.tsv.bgz?dl=0 -O variants.tsv.bgz
+
+gzcat 30760_irnt.gwas.imputed_v3.both_sexes.tsv.bgz > 30760_irnt.gwas.imputed_v3.both_sexes.tsv
+gzcat variants.tsv.bgz > variants.tsv
+```
+
+```{r}
+variants <- fread("variants.tsv", select=c("variant", "chr", "rsid"))
+relevant.variants <- variants[variants$rsid %in% data.PVals$snps]
+rm(variants)
+biobank.pvals <- fread("30760_irnt.gwas.imputed_v3.both_sexes.tsv", select=c("variant", "pval"))
+relevant.pvals <- biobank.pvals[biobank.pvals$variant %in% relevant.variants$variant]
+rm(biobank.pvals)
+
+data.PVals$biobankPVal <- NaN
+for (i in data.PVals$snps) {
+  data.PVals[data.PVals$snps == i,]$biobankPVal = relevant.pvals[relevant.pvals$variant == relevant.variants[relevant.variants$rsid == i]$variant]$pval
+}
+
+data.PVals
+```
+
+# 5. Find if any SNp with minimum p-value in the above table is a known SNP for HDL (have previous studies found the same SNP associated with HDL before?). You may want to use the dbSNP database for this analysis.
